@@ -299,3 +299,88 @@ Azimer HLE. Confirmed CPU-accuracy class bug.
 - ffmpeg recording: `/tmp/yoshi_video/scene.mov` (~95 MB) +
   150 PNG frames
 - Mac Metal still captures: `<worktree>/docs/issue_72_caps/cap_0{2-7}.png`
+
+## Update — 2026-05-02 third evening session: mupen64plus diff attempt
+
+User suggested running mupen64plus with the EXACT RMG settings (GLideN64 / Azimer HLE / Pure Interpreter) and diffing against a buggy run.
+
+### The hard limit on Mac ARM64
+
+```
+$ mupen64plus --emumode 2 ...
+UI-Console Warning: Emulator core doesn't support Dynamic Recompiler.
+Core: Starting R4300 emulator: Cached Interpreter
+```
+
+mupen64plus 2.6.0 from homebrew on Apple Silicon **falls back from
+DynaRec (`--emumode 2`) to Cached Interpreter** because there's no
+JIT for ARM64. Pure Interpreter (`--emumode 0`) and Cached
+Interpreter both faithfully implement MIPS R4300i semantics.
+
+I ran both modes with `M64P_TRACE_FRAMES=200` (200-frame emu_trace.gbi
+each, identical scene path = boot through N64 logo into OpeningRoom).
+- Pure: `cf839f73a8aeef51232b94a03697ba84` (md5)
+- "Dyna" (actually Cached Interp): `1c0befd3166c907f3407279531b61132`
+
+Files differ at byte 24371868 / line 444782 — **but the divergence is
+purely heap-allocation address differences** (`G_MOVEMEM
+w1=802713C0` vs `w1=8027D0E0`, identical opcode and structure). The
+gbi_diff.py structural diff with `--ignore-addresses` reports
+**0 frames with divergences, 0 total divergences** across the full
+200-frame window.
+
+Verdict: on this Mac, **I cannot reproduce the CPU-divergence the bug
+depends on** because the only "inaccurate" CPU mode available is
+Cached Interpreter, which is functionally equivalent to Pure
+Interpreter for our purposes.
+
+### What would unblock this
+
+The diff approach IS the right strategy. To execute it requires:
+
+1. **A machine where mupen64plus has true dynarec** — x86_64 Linux or
+   Windows. Run `--emumode 2` there and you'll get a CPU-side trace
+   that diverges from Pure Interpreter's output. The first divergent
+   GBI command in Yoshi's frame range = the bug. (`gbi_diff.py …
+   --ignore-addresses --frame-range 14-58`)
+
+2. **OR: trace our port via natural attract chain** vs a Pure
+   Interpreter mupen64plus run also via natural attract chain, and
+   diff the Yoshi-segment frames (~frame 7000+ in both, after
+   reaching Yoshi via the 8 prior opening scenes). The port's LP64
+   recompile is functionally equivalent to dynarec for this bug
+   class. This is doable on Mac but requires a ~10 min run and
+   gigabytes of trace text. Sketch:
+   ```
+   # Port natural-chain trace:
+   SSB64_GBI_TRACE=1 SSB64_GBI_TRACE_FRAMES=10000 SSB64_MAX_FRAMES=10000 \
+     ./BattleShip
+   # mupen64plus natural-chain trace (10000 frames ≈ 167s):
+   M64P_TRACE_DIR=/tmp/emu_full M64P_TRACE_FRAMES=10000 mupen64plus \
+     --emumode 0 --rsp <our-rsp-trace> --gfx <our-gfx-stub> \
+     --audio dummy --input dummy --nosaveoptions <rom>
+   # Identify Yoshi frame range in each trace via scene transitions
+   # in the port's ssb64.log + matching G_DL targets in the emu trace
+   # (the emu has no scene log, so correlate by characteristic GBI
+   # patterns — e.g., the YOSHI sprite name card SETTILE+G_TEXRECT
+   # at scene 35 entry).
+   # Diff:
+   python3 debug_tools/gbi_diff/gbi_diff.py port_trace.gbi \
+     /tmp/emu_full/emu_trace.gbi --frame-range PORT_F1-PORT_F2 \
+     --ignore-addresses
+   ```
+   Catch: gbi_diff.py aligns by frame-number, so the port (direct boot
+   = Yoshi at frame ~14) and emu (natural chain = Yoshi at frame
+   ~7000) frame numbers won't align without manual offset. The diff
+   tool needs a `--port-frame-offset N` flag, OR you boot the port
+   via natural chain too.
+
+### Status
+
+Bug confirmed on the port (user has visual evidence). Bug confirmed
+to be CPU-side (RMG with Pure Interp doesn't show it). Bug NOT
+reproducible on Mac via mupen64plus diff (no dynarec available).
+Investigation paused pending either (a) a Windows/Linux x86 machine
+running mupen64plus dynarec, or (b) the natural-chain diff path
+above. The handoff is comprehensive — the unblock is infrastructural
+not analytical.
