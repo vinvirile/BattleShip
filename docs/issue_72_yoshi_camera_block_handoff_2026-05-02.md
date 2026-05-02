@@ -186,3 +186,116 @@ visual difference is subtle in stills and only obvious in motion.
 4. **Check the FTAttributes file load** for fkind=Yoshi (fkind=6).
    `joint_itemheavy_id` is at struct offset 0x334 — verify pass1
    BSWAP + any pass2 fixup for that field reads correctly.
+
+## Update — 2026-05-02 second evening session
+
+User confirmed bug is identical on Mac and Windows (rules out backend
+difference). Bug does not reproduce on RMG with Pure Interpreter +
+Azimer HLE. Confirmed CPU-accuracy class bug.
+
+### Empirical findings against the live port trace + screen captures
+
+1. **The captured-fighter code path doesn't fire during Yoshi's intro.**
+   Instrumented `ftCommonCaptureYoshiProcPhysics:76` and
+   `ftCommonCapturePulledRotateScale` with port_log (gated by
+   `SSB64_TRACE_INTRO_ANIM=1`). Built, ran scene 35 for a full Yoshi
+   visible-scene window — zero log entries fire. Yoshi's
+   `dMVOpeningYoshiKeyEvents` triggers Z+A grab against empty space
+   (the demo has no opponent), so no `capture_gobj` is ever set.
+   **The "yellow geometry" is NOT a captured Pikachu being
+   mispositioned.** Reverted instrumentation.
+
+2. **No `G_SETPRIMCOLOR FFFF00FF` (pure yellow) during Yoshi's frames.**
+   Captured 177-frame `port_trace.gbi` (`SSB64_GBI_TRACE=1`,
+   `SSB64_START_SCENE=35` direct boot, ~38s wall-clock through
+   FuncStart wait + visible Yoshi scene + carry-through to Kirby/Fox/
+   Pikachu chain). Per-frame cmd-count bucketing places Yoshi's
+   visible scene at trace frames **14-58**. Yellow `G_SETPRIMCOLOR
+   FFFF00FF` appears only at trace frames **132-176** — Fox+Pikachu
+   segments, not Yoshi. The unique-color sweep (`grep -oE
+   "G_SETPRIMCOLOR..." | sort -u`) shows the only "warm" colors active
+   during Yoshi are `FFBE5A` (peach posed-wallpaper),
+   `FF8000` (orange), `FF2600` (red — likely the tongue), and
+   `FFA4B8` (pink). No pure-yellow PRIM in the Yoshi window.
+
+3. **macOS screen capture with `ffmpeg -f avfoundation -i 2`
+   60fps** → 150 frames over 2.5s, exported to PNG. Saved earlier
+   stills at `docs/issue_72_caps/cap_03.png` etc. Visually inspecting
+   the Yoshi tongue moment (frames 25-40 of the recording, mapping to
+   trace frames ~25-40 of the visible scene) does NOT clearly show
+   "yellow geometry blocking the top of the camera" the way the user
+   describes. Either the bug is much subtler at the actual resolution
+   the port renders in our Mac window, or there's a specific frame
+   between samples that exhibits the symptom.
+
+### What this rules out
+
+- **Captured-fighter rendering path** (no captured fighter exists).
+- **Yellow `G_SETPRIMCOLOR`** drawing the bug (no FFFF00FF during
+  Yoshi).
+- **`G_FILLRECT (0,0)-(320,240)` full-FB rect** (none in trace
+  frames 14-58 — only the OpeningRoom transition uses one earlier
+  in the natural attract chain).
+- **Magenta debug fallback** in libultraship Metal/D3D11 backends
+  (none found in code review).
+
+### What remains plausible
+
+1. **Vertex-color yellow on a specific mesh.** The "yellow geometry"
+   may come from per-vertex color in `G_VTX` data (loaded from RAM,
+   not visible in GBI command stream). A specific Yoshi DObj or
+   accessory's vertex stream might encode yellow vertex colors that
+   on N64 are correctly clipped/positioned, but on LP64-recompile the
+   skeleton matrix or vertex transform is wrong → yellow vertices
+   appear at unintended screen position.
+2. **Yellow texture pixels through a CI palette.** The CI4/CI8 LUT
+   for some Yoshi-era texture may contain yellow indices that on N64
+   are referenced by a DObj that's clipped, but on LP64 a stride bug
+   causes the wrong DObj to draw.
+3. **Specific Yoshi figatree event** with unusual scaling /
+   positioning. The grab animation has tongue-extension events that
+   move bones to extreme positions — if any LP64 quirk doubles or
+   misaligns those values, a tongue mesh segment could land near
+   y=0 (top of screen).
+
+### Tooling status
+
+- `port_trace.gbi` capture: works.
+- `mupen64plus-rsp-trace.dylib` (emu side): rebuilt, not used here
+  yet — would need a side-by-side capture against an emu that DOES
+  show the bug (so `mupen64plus` HLE/dynarec would show the bug per
+  user, not RMG/Pure Interpreter; that diff would localise the GBI
+  command).
+- macOS screen capture: works at 60fps via ffmpeg avfoundation.
+- Built-in `portFastCaptureBackbufferPNG`: BROKEN on Mac Metal
+  (returns 0 every call). Worth fixing separately.
+
+### Suggested next-session prompt
+
+1. **Run mupen64plus + our RSP trace plugin** through the natural
+   attract chain to capture an emu-side `emu_trace.gbi`. Then run
+   `gbi_diff.py port.gbi emu.gbi --frame-range 14-58
+   --ignore-addresses` to find Yoshi-segment GBI divergences. The
+   port and `mupen64plus + dynarec/HLE` should both have the bug;
+   diff against RMG would be ideal but RMG doesn't bundle our trace
+   plugin natively (needs cross-compilation). The mupen64plus HLE
+   trace gives a baseline of "what the game's CPU emits with HLE-RSP
+   producing identical broken output to ours" — divergences would
+   be Fast3D-specific.
+2. **Or:** instrument `func_ovl0_800C9A38` /
+   `ftPhysicsGetRootMotionJoint` walks for Yoshi's 60-tic visible
+   scene to dump every joint matrix translate. Compare against the
+   tongue-grab figatree event data. Wildly out-of-range values would
+   pinpoint the LP64 quirk.
+3. **Or:** ask the user for a Windows-side annotated screenshot of
+   the bug frame so we know exactly which screen-space pixel range
+   the yellow geometry occupies. That + the GBI trace makes
+   localisation tractable.
+
+### Files
+
+- `port_trace.gbi`: 177 frames, 12.4 MB at
+  `<worktree>/build/debug_traces/port_trace.gbi`
+- ffmpeg recording: `/tmp/yoshi_video/scene.mov` (~95 MB) +
+  150 PNG frames
+- Mac Metal still captures: `<worktree>/docs/issue_72_caps/cap_0{2-7}.png`
