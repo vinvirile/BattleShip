@@ -1,6 +1,17 @@
 #ifndef SSB64_TYPES_H
 #define SSB64_TYPES_H
 
+#ifdef __SWITCH__
+/* DevkitPro newlib: GCC's built-in <stddef.h> does not define wint_t,
+ * but <sys/_types.h> requires it for struct _mbstate.  Any system header
+ * (<string.h>, <stdarg.h>, etc.) may consume <stddef.h> before
+ * <sys/_types.h> can set __need_wint_t.  Provide wint_t globally here. */
+#ifndef _WINT_T
+#define _WINT_T
+typedef __WINT_TYPE__ wint_t;
+#endif
+#endif
+
 #include <PR/ultratypes.h>
 
 // When building with IDO, define some stdint types

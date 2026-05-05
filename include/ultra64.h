@@ -22,6 +22,17 @@
 #ifndef _ULTRA64_H_
 #define _ULTRA64_H_
 
+#ifdef __SWITCH__
+/* <PR/os.h> includes <stddef.h> without __need_wint_t.  GCC's built-in
+ * stddef.h does not honour newlib's __need_wint_t extension, so
+ * <sys/_types.h> never sees wint_t defined.  Provide it globally here
+ * before <stddef.h> is first consumed. */
+#ifndef _WINT_T
+#define _WINT_T
+typedef __WINT_TYPE__ wint_t;
+#endif
+#endif
+
 #include <PR/ultratypes.h>
 #include <PR/rcp.h>
 #include <PR/os.h>

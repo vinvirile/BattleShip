@@ -153,9 +153,11 @@ extern "C" int port_get_display_submit_count(void)
 extern "C" void port_submit_display_list(void *dl)
 {
 	sDLSubmitCount++;
+#ifndef __SWITCH__
 	if (sDLSubmitCount <= 60 || (sDLSubmitCount % 60 == 0)) {
 		port_log("SSB64: port_submit_display_list #%d dl=%p\n", sDLSubmitCount, dl);
 	}
+#endif
 
 	/* Lazy-init the GBI trace system on first DL submit */
 	if (!sGbiTraceInitDone) {
@@ -406,9 +408,11 @@ void PortPushFrame(void)
 		static auto sStartTime = std::chrono::steady_clock::now();
 		auto now = std::chrono::steady_clock::now();
 		double elapsed = std::chrono::duration<double>(now - sStartTime).count();
+#ifndef __SWITCH__
 		if (sFrameCount <= 60 || (sFrameCount % 60 == 0)) {
 			port_log("SSB64: Frame %d complete (t=%.2fs)\n", sFrameCount, elapsed);
 		}
+#endif
 	}
 }
 
